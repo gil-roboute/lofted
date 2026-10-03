@@ -1,0 +1,34 @@
+# Mosquitto broker for Loftie local control — deploy as a Portainer stack.
+#
+# Portainer notes:
+#   - In Portainer: Stacks -> Add stack -> paste this compose.
+#   - gen_certs.py writes to <repo>/certs/. Copy ONLY the three files the broker
+#     needs into this directory's certs/ folder (mosquitto/certs/, gitignored):
+#         ca.crt  server.crt  server.key
+#     Never copy ca.key, client.key or ha.key to the broker host.
+#   - server.key is written 0600; the container runs mosquitto as uid 1883, so:
+#         sudo chown 1883:1883 certs/server.key
+#   - The clock reaches the broker at the HOST's LAN IP on 8883 (the same IP you
+#     baked into server.crt's SAN and into the firmware via BROKER_IP). Give the
+#     host a static / DHCP-reserved address.
+#
+# Bind paths below assume the stack dir contains mosquitto.conf, acl and a certs/
+# folder. Adjust to absolute host paths if your Portainer setup needs them.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: loftie-mosquitto
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./acl:/mosquitto/config/acl:ro
+      - ./certs:/mosquitto/certs:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:

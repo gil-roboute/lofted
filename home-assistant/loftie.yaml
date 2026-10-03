@@ -1,0 +1,173 @@
+# Loftie local-control — Home Assistant MQTT package
+#
+# Drop this in your HA config and include it as a package, e.g. in configuration.yaml:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#   # then place this file at config/packages/loftie.yaml
+#
+# Assumes the MQTT integration is already configured against your local Mosquitto broker
+# (the same one patch_this.py repoints the clock at, with mutual TLS). Give the HA MQTT
+# integration ca.crt + ha.crt + ha.key from gen_certs.py -- not the clock's client cert:
+# the broker ACL (mosquitto/acl) only lets the home-assistant identity publish commands.
+#
+# >>> EDIT THESE <<<
+#   - Replace lXXXXXXXXXXXX everywhere with your device id (the boot-log client_id / MAC).
+#
+# Topics (PROVEN by decompiling mqtt_event_handler / AWS_receive_config_cb /
+# IOTGW_Json2State — see docs/mqtt-command-reference.md):
+#   /devices/<id>/config        the device subscribes here
+#   /devices/<id>/commands/#    the device ALSO subscribes here (wildcard)
+#   /devices/<id>/state         telemetry it publishes (read-only)
+#
+# Key fact: inbound data on EITHER subscribed topic is handed to the SAME JSON
+# parser, and the *subtopic is ignored* — the verb must be a KEY inside the JSON
+# body, not the topic suffix. So {"volume":7} works published to .../config OR
+# .../commands/anything. (We publish to /commands/<verb> only for human clarity.)
+#
+# Deliberately NOT exposed here: otaURL, md5sum, remotelog, restoreToDefault
+# (remote-OTA / log-exfil / factory-reset surface — see docs/security-gaps.md).
+
+# ---------------------------------------------------------------------------
+# Helpers (the alarm UI you drive from a dashboard)
+# ---------------------------------------------------------------------------
+input_boolean:
+  loftie_alarm_enable:
+    name: Loftie Alarm Enabled
+    icon: mdi:alarm
+
+input_datetime:
+  loftie_alarm_time:
+    name: Loftie Alarm Time
+    has_date: false
+    has_time: true
+
+input_number:
+  loftie_volume:
+    name: Loftie Volume
+    min: 0
+    max: 10
+    step: 1
+    mode: slider
+    icon: mdi:volume-high
+  loftie_nightlight:
+    name: Loftie Night Light Level
+    min: 0
+    max: 12
+    step: 1
+    mode: slider
+    icon: mdi:lightbulb-night
+
+# ---------------------------------------------------------------------------
+# Read-only telemetry from /state. Keys below are the ACTUAL keys emitted by
+# IOTGW_State2Json (FUN_400f9b7c). Note: the firmware does NOT publish an `rssi`
+# field, so there is no WiFi-signal sensor here (it would never populate).
+# ---------------------------------------------------------------------------
+mqtt:
+  sensor:
+    - name: Loftie Battery
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ value_json.battery | default('unknown') }}"
+      unit_of_measurement: "%"
+      device_class: battery
+    - name: Loftie Volume
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ value_json.volume | default('unknown') }}"
+      icon: mdi:volume-high
+    - name: Loftie Night Light
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ value_json.nightLight | default('unknown') }}"
+      icon: mdi:lightbulb-night
+  binary_sensor:
+    - name: Loftie Plugged In
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ 'ON' if value_json.pluggedIn else 'OFF' }}"
+      device_class: plug
+    - name: Loftie Charging
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ 'ON' if value_json.BattCharge else 'OFF' }}"
+      device_class: battery_charging
+    - name: Loftie Night Light On
+      state_topic: "/devices/lXXXXXXXXXXXX/state"
+      value_template: "{{ 'ON' if value_json.nightLightOn else 'OFF' }}"
+      device_class: light
+
+# ---------------------------------------------------------------------------
+# Command scripts. Each publishes a flat JSON object whose KEY is the verb
+# (subtopic is ignored by the firmware). nightLight / volume / nightLightOn are
+# handled inline by AWS_receive_config_cb; alarmControl / restart by
+# IOTGW_Json2State. All PROVEN by decompilation — see docs/mqtt-command-reference.md.
+# ---------------------------------------------------------------------------
+script:
+  loftie_set_volume:
+    alias: Loftie Set Volume
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: "/devices/lXXXXXXXXXXXX/commands/volume"
+          qos: 2
+          payload: '{"volume": {{ states("input_number.loftie_volume") | int }}}'
+
+  loftie_set_nightlight:
+    alias: Loftie Set Night Light
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: "/devices/lXXXXXXXXXXXX/commands/nightLight"
+          qos: 2
+          payload: '{"nightLight": {{ states("input_number.loftie_nightlight") | int }}}'
+
+  loftie_snooze:
+    alias: Loftie Snooze
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: "/devices/lXXXXXXXXXXXX/commands/alarmControl"
+          qos: 2
+          payload: '{"alarmControl":"snooze"}'
+
+  loftie_dismiss:
+    alias: Loftie Dismiss
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: "/devices/lXXXXXXXXXXXX/commands/alarmControl"
+          qos: 2
+          payload: '{"alarmControl":"dismiss"}'
+
+  loftie_restart:
+    alias: Loftie Restart
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: "/devices/lXXXXXXXXXXXX/commands/restart"
+          qos: 2
+          payload: '{"restart":1}'
+
+# ---------------------------------------------------------------------------
+# Alarm sync (config topic — PROVEN). Generalizes the README automation:
+# pushes the alarm whenever the enable toggle or the time helper changes.
+# daysOfWeek 127 = every day; bit0=Sun..bit6=Sat (62 = Mon-Fri).
+# ---------------------------------------------------------------------------
+automation:
+  - alias: Set Loftie Alarm
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_boolean.loftie_alarm_enable
+          - input_datetime.loftie_alarm_time
+    conditions: []
+    actions:
+      - action: mqtt.publish
+        data:
+          evaluate_payload: false
+          qos: "2"
+          topic: /devices/lXXXXXXXXXXXX/config
+          payload: >-
+            {"alarms":[{"alarmLight":false,"daysOfWeek":127,"getUpToneFileIdx":0,
+            "isSet":{{ 'true' if is_state('input_boolean.loftie_alarm_enable','on') else 'false' }},
+            "time":"{{ strptime(states('input_datetime.loftie_alarm_time'), '%H:%M:%S')
+            | as_timestamp() | timestamp_custom('%I:%M%p', false) | lower }}",
+            "toneFolderIdx":0,"type":"alarm","volume":3,"wakeUpToneFileIdx":0,
+            "getUpToneFolderIdx":0,"wakeUpToneFolderIdx":0}]}
+    mode: single

@@ -1,0 +1,38 @@
+# Firmware dumps / images — large, and contain secrets (RSA client key, WiFi creds).
+# Never commit these.
+*.bin
+
+# Generated TLS material + patcher output (secrets / build artifacts).
+# Unanchored names match at any depth; certs/ holds the whole generated chain.
+certs/
+ca.key
+ca.crt
+ca.srl
+client.key
+client.csr
+client.crt
+ha.key
+ha.crt
+server.key
+server.csr
+server.crt
+fw_patched.bin
+
+# Personal device records (MAC / serial / WiFi creds) — keep local only, never commit.
+*.local.md
+device-id.local.md
+
+# NVS reads from the pre-flight check (nvs.bin / app_cfg.bin) are covered by *.bin above —
+# they hold your WiFi credentials.
+
+# Python bytecode
+__pycache__/
+
+# Ghidra project — local analysis database; recreate via docs/ghidra-import.md
+*.gpr
+*.lock
+*.lock~
+*.rep/
+
+# LibreOffice/OpenOffice lock files
+.~lock.*#

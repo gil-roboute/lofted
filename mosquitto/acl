@@ -1,0 +1,23 @@
+# Mosquitto ACL for Loftie local control.
+#
+# Usernames are the client-cert CNs (mosquitto.conf: use_identity_as_username),
+# issued by ../gen_certs.py. Once an acl_file is set, anything not granted here
+# is denied, so a cert signed by your CA but not listed below gets no topics.
+#
+# The firmware applies any JSON on /config or /commands/# -- including otaURL
+# (unsigned remote firmware install, see docs/security-gaps.md C1). Only the
+# home-assistant identity may publish there; the clock may not command itself.
+
+# The clock: reads its config/command topics, publishes telemetry.
+user AlarmClock
+topic read /devices/+/config
+topic read /devices/+/commands/#
+topic write /devices/+/state
+
+# Home Assistant: reads telemetry, sends config/commands.
+# homeassistant/# covers HA's own birth/status messages.
+user home-assistant
+topic read /devices/+/state
+topic write /devices/+/config
+topic write /devices/+/commands/#
+topic readwrite homeassistant/#
